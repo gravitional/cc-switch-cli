@@ -134,6 +134,12 @@ opt-level = "s"
 panic = "abort"
 strip = "symbols"
 
+# Opt-in build profile for runtime throughput instead of minimum binary size.
+# Build with: cargo build --profile release-speed
+[profile.release-speed]
+inherits = "release"
+opt-level = 3
+
 [dev-dependencies]
 minisign = "0.9.1"
 serial_test = "3"

@@ -2051,6 +2051,35 @@ mod tests {
     }
 
     #[test]
+    fn parses_skills_import_from_directory_depth() {
+        let cli = Cli::parse_from([
+            "cc-switch",
+            "skills",
+            "import-dir",
+            "~/.agents/skills",
+            "-L",
+            "5",
+            "--apps",
+            "codex,claude",
+        ]);
+
+        match cli.command {
+            Some(Commands::Skills(
+                super::commands::skills::SkillsCommand::ImportFromDirectory {
+                    directory,
+                    max_depth,
+                    apps,
+                },
+            )) => {
+                assert_eq!(directory, "~/.agents/skills");
+                assert_eq!(max_depth, 5);
+                assert_eq!(apps, vec!["codex", "claude"]);
+            }
+            _ => panic!("expected skills import-from-directory command"),
+        }
+    }
+
+    #[test]
     fn parses_skills_repo_enable_subcommand() {
         let cli = Cli::parse_from(["cc-switch", "skills", "repos", "enable", "foo/bar"]);
 

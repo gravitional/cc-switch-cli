@@ -223,6 +223,87 @@ fn import_from_apps_imports_agents_skill_with_lock_metadata() {
 }
 
 #[test]
+fn import_from_apps_respects_max_depth_for_shared_skills_root() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+    let skills_root = home.join("shared").join("skills");
+
+    write_skill_md(
+        &skills_root.join("alpha-skill"),
+        "Alpha Skill",
+        "First skill",
+    );
+    write_skill_md(
+        &skills_root.join("group").join("beta-skill"),
+        "Beta Skill",
+        "Second skill",
+    );
+    std::fs::create_dir_all(skills_root.join("not-a-skill")).expect("create non-skill directory");
+
+    let imported = SkillService::import_from_paths_with_depth(
+        vec![skills_root.to_string_lossy().into_owned()],
+        None,
+        1,
+    )
+    .expect("import direct child skills only");
+
+    let directories = imported
+        .iter()
+        .map(|skill| skill.directory.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(directories, vec!["alpha-skill"]);
+    assert!(home
+        .join(".cc-switch")
+        .join("skills")
+        .join("alpha-skill")
+        .join("SKILL.md")
+        .is_file());
+
+    let imported_deeper =
+        SkillService::import_from_app_dirs(vec![skills_root.to_string_lossy().into_owned()])
+            .expect("default import scans to depth three");
+    assert!(imported_deeper
+        .iter()
+        .any(|skill| skill.directory == "beta-skill"));
+}
+
+#[test]
+fn import_skips_same_named_source_without_skill_md() {
+    let _guard = lock_test_mutex();
+    reset_test_fs();
+    let home = ensure_test_home();
+
+    let pi_dir = SkillService::get_app_skills_dir(&AppType::Pi)
+        .expect("resolve Pi skills directory")
+        .join("duplicate-skill");
+    std::fs::create_dir_all(&pi_dir).expect("create incomplete Pi skill directory");
+    write_skill_md(
+        &home.join(".agents").join("skills").join("duplicate-skill"),
+        "Complete Skill",
+        "Valid source under agents",
+    );
+
+    let imported = SkillService::import_from_app_dirs(vec!["duplicate-skill".to_string()])
+        .expect("import from valid source");
+
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0].name, "Complete Skill");
+    assert!(
+        !imported[0].apps.pi,
+        "incomplete Pi directory is not a source"
+    );
+    let copied = std::fs::read_to_string(
+        home.join(".cc-switch")
+            .join("skills")
+            .join("duplicate-skill")
+            .join("SKILL.md"),
+    )
+    .expect("read imported skill");
+    assert!(copied.contains("Valid source under agents"));
+}
+
+#[test]
 fn scan_unmanaged_includes_agents_and_ssot_sources() {
     let _guard = lock_test_mutex();
     reset_test_fs();

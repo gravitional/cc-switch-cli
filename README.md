@@ -387,7 +387,9 @@ cc-switch skills info <name>         # Show skill information
 cc-switch skills sync                # Sync enabled skills to app dirs
 cc-switch skills sync-method [m]     # Show/set sync method (auto|symlink|copy)
 cc-switch skills scan-unmanaged      # Scan unmanaged skills in app dirs
-cc-switch skills import-from-apps    # Import unmanaged skills into SSOT
+cc-switch skills import-from-apps <name|path>...  # Import selected skills, paths, or a skills root
+cc-switch skills import-from-directory <parent>   # Batch-import skills under a shared parent (default depth 3)
+cc-switch skills import-from-directory <parent> -L 5  # Scan deeper when needed
 cc-switch skills repos list          # List skill repositories
 cc-switch skills repos add <repo>    # Add repo (owner/name[@branch] or GitHub URL)
 cc-switch skills repos remove <repo> # Remove repo (owner/name or GitHub URL)
