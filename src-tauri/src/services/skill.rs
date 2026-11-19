@@ -1105,7 +1105,7 @@ impl SkillService {
         let Ok(app_dir) = Self::get_app_skills_dir(app) else {
             return false;
         };
-        app_dir.join(directory).is_dir()
+        app_dir.join(directory).join("SKILL.md").is_file()
     }
 
     fn compute_pi_deployment_hash(dir: &Path) -> Result<String, AppError> {
@@ -3414,25 +3414,152 @@ impl SkillService {
         Ok(unmanaged.into_values().collect())
     }
 
+    /// Import skill names, individual skill paths, or a shared skills root.
+    /// A shared root is searched recursively up to three directory levels.
     pub fn import_from_app_dirs(directories: Vec<String>) -> Result<Vec<InstalledSkill>, AppError> {
+        Self::import_from_paths_with_depth(directories, None, 3)
+    }
+
+    pub fn import_from_paths(
+        directories: Vec<String>,
+        apps: Option<SkillApps>,
+    ) -> Result<Vec<InstalledSkill>, AppError> {
+        Self::import_from_paths_with_depth(directories, apps, 3)
+    }
+
+    /// Import skills found below one or more paths. `max_depth` counts child
+    /// directory levels below each supplied root; a directory containing a
+    /// `SKILL.md` is treated as one skill and is not searched further.
+    pub fn import_from_paths_with_depth(
+        directories: Vec<String>,
+        apps: Option<SkillApps>,
+        max_depth: usize,
+    ) -> Result<Vec<InstalledSkill>, AppError> {
+        if max_depth == 0 || max_depth > 64 {
+            return Err(AppError::InvalidInput(
+                "Skill import depth must be between 1 and 64".to_string(),
+            ));
+        }
+
+        fn collect_skills(
+            current: &Path,
+            depth: usize,
+            max_depth: usize,
+            found: &mut Vec<PathBuf>,
+        ) -> Result<(), AppError> {
+            let entries = fs::read_dir(current).map_err(|error| AppError::io(current, error))?;
+            for entry in entries {
+                let entry = entry.map_err(|error| AppError::io(current, error))?;
+                let child = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .map_err(|error| AppError::io(&child, error))?;
+                if !file_type.is_dir()
+                    || child
+                        .file_name()
+                        .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+
+                if child.join("SKILL.md").is_file() {
+                    found.push(child);
+                } else if depth < max_depth {
+                    collect_skills(&child, depth + 1, max_depth, found)?;
+                }
+            }
+            Ok(())
+        }
+
         let scan = Self::scan_unmanaged()?;
-        let imports = directories
+        let mut source_paths = HashMap::new();
+        let mut names = Vec::new();
+
+        for input in directories {
+            let path = if input == "~" {
+                dirs::home_dir().ok_or_else(|| {
+                    AppError::Message("Unable to resolve the home directory".to_string())
+                })?
+            } else if let Some(relative) = input.strip_prefix("~/") {
+                dirs::home_dir()
+                    .ok_or_else(|| {
+                        AppError::Message("Unable to resolve the home directory".to_string())
+                    })?
+                    .join(relative)
+            } else {
+                PathBuf::from(&input)
+            };
+            if !path.is_dir() {
+                if input == "~"
+                    || input.starts_with("~/")
+                    || input.starts_with("./")
+                    || input.starts_with("../")
+                    || path.is_absolute()
+                    || input.contains('/')
+                    || input.contains('\\')
+                {
+                    return Err(AppError::Message(format!(
+                        "Skill import path is not a directory: {}",
+                        path.display()
+                    )));
+                }
+                names.push(input);
+                continue;
+            }
+
+            let mut found = Vec::new();
+            if path.join("SKILL.md").is_file() {
+                found.push(path.clone());
+            } else {
+                collect_skills(&path, 1, max_depth, &mut found)?;
+            }
+
+            found.sort();
+            for source in found {
+                let Some(name) = source.file_name().and_then(OsStr::to_str) else {
+                    continue;
+                };
+                let name = name.to_string();
+                if source_paths.contains_key(&name) {
+                    log::warn!(
+                        "Multiple Skills named '{name}' found under import paths; keeping the first source"
+                    );
+                    continue;
+                }
+                names.push(name.clone());
+                source_paths.insert(name, source);
+            }
+        }
+
+        names.sort();
+        names.dedup();
+        let imports = names
             .into_iter()
             .map(|directory| {
-                let apps = scan
+                let inferred_apps = scan
                     .iter()
                     .find(|skill| skill.directory == directory)
                     .map(|skill| SkillApps::from_labels(&skill.found_in))
                     .unwrap_or_default();
-                ImportSkillSelection { directory, apps }
+                ImportSkillSelection {
+                    directory,
+                    apps: apps.clone().unwrap_or(inferred_apps),
+                }
             })
             .collect();
 
-        Self::import_from_apps(imports)
+        Self::import_from_apps_with_sources(imports, source_paths)
     }
 
     pub fn import_from_apps(
         imports: Vec<ImportSkillSelection>,
+    ) -> Result<Vec<InstalledSkill>, AppError> {
+        Self::import_from_apps_with_sources(imports, HashMap::new())
+    }
+
+    fn import_from_apps_with_sources(
+        imports: Vec<ImportSkillSelection>,
+        explicit_sources: HashMap<String, PathBuf>,
     ) -> Result<Vec<InstalledSkill>, AppError> {
         let _state_guard = skill_state_write_guard();
         let mut index = Self::load_index_unlocked()?;
@@ -3468,11 +3595,22 @@ impl SkillService {
                     continue;
                 }
             };
-            let mut source_path: Option<PathBuf> = None;
+            if index
+                .skills
+                .keys()
+                .any(|existing| existing.eq_ignore_ascii_case(&dir_name))
+            {
+                log::debug!("Skill '{dir_name}' is already managed; skipping import");
+                continue;
+            }
+            let mut source_path: Option<PathBuf> = explicit_sources
+                .get(&dir_name)
+                .filter(|path| path.is_dir() && path.join("SKILL.md").is_file())
+                .cloned();
 
             for (base, label) in &search_sources {
                 let skill_path = base.join(&dir_name);
-                if skill_path.exists() {
+                if skill_path.is_dir() && skill_path.join("SKILL.md").is_file() {
                     if source_path.is_none() {
                         source_path = Some(skill_path);
                     }
@@ -3493,7 +3631,7 @@ impl SkillService {
             let skill_md = dest.join("SKILL.md");
             let (name, description) = Self::read_skill_name_desc(&skill_md, &dir_name);
             let mut apps = selection.apps;
-            apps.pi = Self::skill_exists_in_app(&dir_name, &AppType::Pi);
+            apps.pi |= Self::skill_exists_in_app(&dir_name, &AppType::Pi);
             let (id, repo_owner, repo_name, repo_branch, readme_url) =
                 build_repo_info_from_lock(&agents_lock, &dir_name);
 

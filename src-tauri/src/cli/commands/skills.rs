@@ -8,7 +8,7 @@ use crate::cli::commands::app_targets::{
 use crate::cli::i18n::texts;
 use crate::cli::ui::{create_table, highlight, info, success};
 use crate::error::AppError;
-use crate::services::skill::{ImportSkillSelection, SkillRepo, SkillStorageLocation, SyncMethod};
+use crate::services::skill::{SkillRepo, SkillStorageLocation, SyncMethod};
 use crate::services::SkillService;
 
 #[derive(Subcommand)]
@@ -92,13 +92,25 @@ pub enum SkillsCommand {
     Sync,
     /// Scan unmanaged skills in app skills dirs
     ScanUnmanaged,
-    /// Import unmanaged skills from app skills dirs into SSOT
+    /// Import one or more unmanaged skills from app skills directories.
     ImportFromApps {
         /// Enabled apps for every imported skill. Defaults to the apps where each skill was found.
         #[arg(long, value_name = "APP[,APP]", value_delimiter = ',', num_args = 1)]
         apps: Vec<String>,
-        /// One or more skill directories to import
+        /// Skill names, skill directory paths, or skills root directories
         directories: Vec<String>,
+    },
+    /// Import skills recursively from a shared parent directory
+    #[command(alias = "import-dir")]
+    ImportFromDirectory {
+        /// Parent directory containing skill directories
+        directory: String,
+        /// Maximum directory depth to scan (default: 3)
+        #[arg(short = 'L', long = "max-depth", default_value_t = 3)]
+        max_depth: usize,
+        /// Enabled apps for every imported skill. Defaults to the apps where each skill was found.
+        #[arg(long, value_name = "APP[,APP]", value_delimiter = ',', num_args = 1)]
+        apps: Vec<String>,
     },
     /// Show skill information
     Info {
@@ -169,6 +181,11 @@ pub fn execute(cmd: SkillsCommand, app: Option<AppType>) -> Result<(), AppError>
         SkillsCommand::Sync => sync_skills(app.as_ref()),
         SkillsCommand::ScanUnmanaged => scan_unmanaged(),
         SkillsCommand::ImportFromApps { apps, directories } => import_from_apps(apps, directories),
+        SkillsCommand::ImportFromDirectory {
+            directory,
+            max_depth,
+            apps,
+        } => import_from_directory(apps, directory, max_depth),
         SkillsCommand::Info { spec } => show_skill_info(&spec),
         SkillsCommand::SyncMethod { method } => sync_method(method),
         SkillsCommand::StorageLocation { location } => storage_location(location),
@@ -468,24 +485,45 @@ fn import_from_apps(raw_apps: Vec<String>, directories: Vec<String>) -> Result<(
         ));
     }
 
-    let imported = if raw_apps.is_empty() {
-        SkillService::import_from_app_dirs(directories)?
+    let targets = if raw_apps.is_empty() {
+        None
     } else {
         let targets = parse_app_targets(&raw_apps, "Skills")?;
-        let apps = skill_apps_from_targets(&targets);
-        let imports = directories
-            .into_iter()
-            .map(|directory| ImportSkillSelection {
-                directory,
-                apps: apps.clone(),
-            })
-            .collect();
-        SkillService::import_from_apps(imports)?
+        Some(skill_apps_from_targets(&targets))
     };
-    println!(
-        "{}",
-        success(&format!("✓ Imported {} skill(s) into SSOT", imported.len()))
-    );
+    let imported = SkillService::import_from_paths(directories, targets)?;
+    report_imported_skills(imported)
+}
+
+fn import_from_directory(
+    raw_apps: Vec<String>,
+    directory: String,
+    max_depth: usize,
+) -> Result<(), AppError> {
+    let targets = if raw_apps.is_empty() {
+        None
+    } else {
+        let targets = parse_app_targets(&raw_apps, "Skills")?;
+        Some(skill_apps_from_targets(&targets))
+    };
+    let imported = SkillService::import_from_paths_with_depth(vec![directory], targets, max_depth)?;
+    report_imported_skills(imported)
+}
+
+fn report_imported_skills(
+    imported: Vec<crate::app_config::InstalledSkill>,
+) -> Result<(), AppError> {
+    if imported.is_empty() {
+        println!(
+            "{}",
+            info("No skills imported. Check that the directory contains folders with SKILL.md files within the scan depth, or use `skills scan-unmanaged`.")
+        );
+    } else {
+        println!(
+            "{}",
+            success(&format!("✓ Imported {} skill(s) into SSOT", imported.len()))
+        );
+    }
     Ok(())
 }
 

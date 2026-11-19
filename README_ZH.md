@@ -388,7 +388,9 @@ cc-switch skills info <name>         # 显示技能信息
 cc-switch skills sync                # 同步已启用技能到应用目录
 cc-switch skills sync-method [m]     # 查看/设置同步方式（auto|symlink|copy）
 cc-switch skills scan-unmanaged      # 扫描未管理技能
-cc-switch skills import-from-apps    # 导入未管理技能到 SSOT
+cc-switch skills import-from-apps <名称|路径>... # 导入指定技能、技能目录或共享 skills 根目录
+cc-switch skills import-from-directory <父目录>  # 批量导入共同父目录下的技能（默认扫描深度 3）
+cc-switch skills import-from-directory <父目录> -L 5 # 需要时显式加深扫描
 cc-switch skills repos list          # 查看仓库列表
 cc-switch skills repos add <repo>    # 添加仓库（owner/name[@branch] 或 GitHub URL）
 cc-switch skills repos remove <repo> # 移除仓库（owner/name 或 GitHub URL）
