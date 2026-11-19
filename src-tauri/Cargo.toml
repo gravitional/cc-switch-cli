@@ -134,10 +134,10 @@ opt-level = "s"
 panic = "abort"
 strip = "symbols"
 
-# Opt-in build profile for runtime throughput instead of minimum binary size.
-# Build with: cargo build --profile release-speed
-[profile.release-speed]
+# Build with `cargo build --profile perf` to prioritize runtime performance.
+[profile.perf]
 inherits = "release"
+lto = "fat"
 opt-level = 3
 
 [dev-dependencies]
