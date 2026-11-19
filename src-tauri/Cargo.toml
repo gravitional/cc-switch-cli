@@ -134,6 +134,12 @@ opt-level = "s"
 panic = "abort"
 strip = "symbols"
 
+# Build with `cargo build --profile perf` to prioritize runtime performance.
+[profile.perf]
+inherits = "release"
+lto = "fat"
+opt-level = 3
+
 [dev-dependencies]
 minisign = "0.9.1"
 serial_test = "3"
